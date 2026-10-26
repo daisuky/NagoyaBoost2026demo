@@ -1,0 +1,12 @@
+{
+  "name": "@daruma-ikka/recording-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./types": "./types.ts",
+    "./quality": "./quality.mjs",
+    "./upload": "./upload.mjs",
+    "./auto-archive": "./auto-archive.mjs"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "nagoya-boost-2026-demo",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["apps/recording", "packages/recording-core"],
+  "scripts": {
+    "check:public": "node scripts/check-publication.mjs",
+    "dev": "npm run dev --workspace=ippo-recording-session",
+    "build": "npm run build --workspace=ippo-recording-session",
+    "test": "node --test tests/*.test.mjs && npm run test --workspace=ippo-recording-session",
+    "setup": "npm run setup --workspace=ippo-recording-session"
+  },
+  "engines": { "node": ">=22.12.0" }
+}
