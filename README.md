@@ -1,6 +1,6 @@
 # Ippo Recording — 公開ソース版
 
-二者通話、双方同意、話者別録音、IndexedDB保存、Google Driveへの送信・再送を備えたReact PWAの公開用スナップショットです。
+二者通話、双方同意、二人の会話音声の混合録音、IndexedDB保存、Google Driveへの送信・再送を備えたReact PWAの公開用スナップショットです。
 
 - `apps/recording`：PWA、Vercel API、Cloudflare Worker、未署名のCapacitor iOSプロジェクト。
 - `packages/recording-core`：型、通話品質判定、アップロードと再送の共通部品。同梱workspaceなので、非公開npmレジストリへの接続は不要です。

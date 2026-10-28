@@ -4,6 +4,8 @@ export type Signal = { seq: number; type: 'offer' | 'answer' | 'candidate' | 're
 export type CallStatus = { version: number; recording: boolean; allowed: boolean; participants: Participant[]; serverTime: string; ended: boolean; signals: Signal[] };
 export type Credentials = { auth: string; iceServers: RTCIceServer[]; room: string; role: 'host' | 'guest'; participantId: string; status: CallStatus; invite?: string; archiveAuth?: string };
 export type Recording = {
+  audioLayout?: 'conversation';
+  speakers?: { speakerId: string; speakerName: string }[];
   id: string; consultationId: string; title: string; createdAt: string; endedAt?: string;
   state: 'recording' | 'local' | 'interrupted' | 'saved'; mimeType: string;
   tracks: { id: string; speakerId: string; speakerName: string; startedAt: string; chunkCount: number; bytes?: number }[];

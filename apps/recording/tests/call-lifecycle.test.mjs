@@ -140,7 +140,7 @@ test('leaving the page after negotiation starts keeps the room, microphone and p
   const peer = f.call.pc;
   document.visibilityState = 'hidden'; await f.call.visibility(false);
   assert.equal(f.call.closed, false); assert.equal(f.state().ended, false); assert.equal(f.call.pc, peer);
-  assert.match(f.call.message, /音声通話は維持/);
+  assert.match(f.call.message, /同じ通話と録音を継続/);
   assert.equal(f.streams[0].getTracks()[0].readyState, 'live');
 });
 
@@ -204,23 +204,32 @@ for (const action of ['consent', 'stop']) test(`a newer ${action} cancellation s
   assert.equal(f.call.recorder, undefined); assert.equal(f.state().recording, false);
 });
 
-test('backgrounding a recording host stops local and server recording without ending voice', async t => {
+test('backgrounding and restoring a recording host preserves the same recorder, consent and voice connection', async t => {
   const f = fixture(t); await f.call.connect('create', { name: 'host' }); f.join(); f.prepareRecording(); await f.call.operation;
+  // A connected real call has already exchanged its first offer/answer.
+  f.call.generation = 1; f.state().generation = 1;
   await f.call.start('画面切替'); assert.ok(f.call.recorder);
-  const peer = f.call.pc;
+  const peer = f.call.pc, recorder = f.call.recorder, id = f.call.recording.id;
+  const stops = f.requests.filter(action => action === 'stop').length;
   document.visibilityState = 'hidden'; await f.call.visibility(false);
-  assert.equal(f.call.recorder, undefined); assert.equal(f.state().recording, false); assert.equal(f.call.closed, false);
+  assert.equal(f.call.recorder, recorder); assert.equal(f.state().recording, true); assert.equal(f.call.closed, false);
+  assert.equal(f.call.status.participants.find(p => p.identity === 'host').connected, true);
   assert.equal(f.call.pc, peer); assert.equal(f.streams[0].getTracks()[0].readyState, 'live');
   document.visibilityState = 'visible'; await f.call.visibility(true);
-  assert.equal(f.call.recorder, undefined); assert.equal(f.call.closed, false); assert.equal(f.call.pc, peer);
+  assert.equal(f.call.recorder, recorder); assert.equal(f.call.closed, false); assert.equal(f.call.pc, peer);
+  assert.equal(f.call.recording.id, id); assert.equal(f.state().recording, true);
+  assert.equal(f.requests.filter(action => action === 'stop').length, stops);
 });
 
-test('backgrounding a guest stops server recording even though the guest has no recorder', async t => {
+test('backgrounding a guest preserves server recording and reports actual media connectivity', async t => {
   const f = fixture(t); await f.call.connect('create', { name: 'host' }); f.join(); f.prepareRecording(); await f.call.operation;
   await f.call.request('start', {}, 'host');
   f.call.credentials = { ...f.call.credentials, role: 'guest', auth: 'guest' };
   document.visibilityState = 'hidden'; await f.call.visibility(false);
-  assert.equal(f.state().recording, false); assert.equal(f.state().ended, false); assert.equal(f.call.closed, false);
+  assert.equal(f.state().recording, true); assert.equal(f.state().ended, false); assert.equal(f.call.closed, false);
+  assert.equal(f.state().participants.guest.connected, true);
+  document.visibilityState = 'visible'; await f.call.visibility(true);
+  assert.equal(f.state().recording, true);
 });
 
 test('recording cannot start from a background page', async t => {
@@ -230,13 +239,28 @@ test('recording cannot start from a background page', async t => {
   assert.equal(f.call.recorder, undefined); assert.equal(f.state().recording, false);
 });
 
-test('foreground supervision retries end after 90 seconds, while hidden time does not expire the room', async t => {
+test('switching apps during an explicitly requested start does not cancel that start', async t => {
+  const f = fixture(t); await f.call.connect('create', { name: 'host' }); f.join(); f.prepareRecording(); await f.call.operation;
+  f.call.generation = 1; f.state().generation = 1;
+  const request = f.call.request, started = Promise.withResolvers(), deliver = Promise.withResolvers();
+  f.call.request = async (action, fields, auth) => {
+    const response = await request(action, fields, auth);
+    if (action === 'start') { started.resolve(); await deliver.promise; }
+    return response;
+  };
+  const starting = f.call.start('画面切替中の開始'); await started.promise;
+  document.visibilityState = 'hidden'; await f.call.visibility(false); deliver.resolve(); await starting;
+  assert.ok(f.call.recorder); assert.equal(f.state().recording, true); assert.equal(f.call.closed, false);
+});
+
+test('a prolonged signaling outage does not end voice when moving between foreground and background', async t => {
   const options = { failHeartbeat: true }; const f = fixture(t, options);
   await f.call.connect('create', { name: 'host' });
   f.call.pageVisible = false; f.call.recoveryStarted = Date.now() - 100000; await f.call.poll();
   assert.equal(f.call.closed, false);
   f.call.pageVisible = true; await f.call.poll();
-  assert.equal(f.call.closed, true); assert.match(f.call.message, /90秒/);
+  assert.equal(f.call.closed, false); assert.equal(f.state().ended, false);
+  assert.equal(f.call.local.getTracks()[0].readyState, 'live');
 });
 
 test('returning to a connected call replaces an OS-ended microphone and preserves mute', async t => {

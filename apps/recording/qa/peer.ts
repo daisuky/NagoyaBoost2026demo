@@ -109,33 +109,41 @@ button.onclick = async () => {
     const recording = host.recording!;
     for (const track of recording.tracks) {
       const blob = await store.audio(recording, track.id), audio = await context.decodeAudioData(await blob.arrayBuffer());
-      if (audio.duration < 4 || blob.size < 100) throw new Error('話者別の音声が不足');
+      if (audio.duration < 4 || blob.size < 100 || recording.tracks.length !== 1 || track.speakerId !== 'conversation') throw new Error('会話音声が不足');
       log(`PASS: ${track.speakerId} の音声を録音・復元・デコード (${audio.duration.toFixed(2)}秒)`);
     }
     const peers = controllers.map(c => c.pc);
     log('STEP: 作成者の画面切替に向けて録音を開始');
     await host.start('QA 作成者の画面切替'); recordIds.push(host.recording!.id); await pause(500);
+    const ongoingRecorder = host.recorder, ongoingId = host.recording!.id;
     log('STEP: 作成者の画面切替通知を送信');
     await host.visibility(false);
-    if (host.recorder || controllers.some((c, i) => c.closed || c.pc !== peers[i] || c.pc?.connectionState !== 'connected')) throw new Error('作成者の画面切替で通話が切断された');
+    if (host.recorder !== ongoingRecorder || controllers.some((c, i) => c.closed || c.pc !== peers[i] || c.pc?.connectionState !== 'connected')) throw new Error('作成者の画面切替で通話または録音が切断された');
+    await pause(1000);
     log('STEP: 作成者の復帰通知を送信');
     await host.visibility(true); await until(() => !!host.status?.allowed, '作成者復帰後の接続確認');
-    if (host.recorder) throw new Error('画面復帰で録音が自動再開された');
-    log('PASS: 作成者の画面切替で録音だけ停止し、同じ音声接続を維持。復帰時に録音を自動再開しない');
-    await host.start('QA 相手の画面切替'); recordIds.push(host.recording!.id); await pause(500);
-    await guest.visibility(false); await until(() => !host.recorder, '相手の画面切替による録音停止');
+    if (host.recorder !== ongoingRecorder) throw new Error('画面復帰で録音が入れ替わった');
+    log('PASS: 作成者の画面切替と復帰で同じ通話・録音を維持');
+    await guest.visibility(false);
     const receivedBytes = async () => {
       let bytes = 0; (await host.pc!.getStats()).forEach(item => { if (item.type === 'inbound-rtp') bytes += item.bytesReceived || 0; }); return bytes;
     };
     const beforeBytes = await receivedBytes(); await pause(1500);
     if (await receivedBytes() <= beforeBytes || controllers.some((c, i) => c.closed || c.pc !== peers[i])) throw new Error('画面を離れた相手の音声を継続受信できない');
     await guest.visibility(true); await until(() => !!host.status?.allowed, '相手復帰後の接続確認');
-    log('PASS: 相手の画面切替で録音だけ停止し、双方向の接続と音声受信を維持');
-    await host.start('QA 復帰後の手動録音'); recordIds.push(host.recording!.id); await pause(4500); await host.stop('user');
+    if (host.recorder !== ongoingRecorder || host.recording!.id !== ongoingId) throw new Error('相手の画面切替で録音が切れた');
+    log('PASS: 相手の画面切替でも双方向の音声と同じ録音を維持');
+    await pause(1500); await host.stop('user');
     for (const track of host.recording!.tracks) {
       const audio = await context.decodeAudioData(await (await store.audio(host.recording!, track.id)).arrayBuffer());
-      if (audio.duration < 4) throw new Error('復帰後の手動録音が不足');
-      log(`PASS: 画面復帰後の${track.speakerId}音声を手動録音・復元 (${audio.duration.toFixed(2)}秒)`);
+      if (audio.duration < 4) throw new Error('画面切替をまたぐ会話音声が不足');
+      const samples = audio.getChannelData(0), offset = Math.floor(audio.sampleRate), length = Math.floor(audio.sampleRate);
+      for (const frequency of [440, 880]) {
+        let real = 0, imaginary = 0;
+        for (let i = 0; i < length; i++) { const phase = 2 * Math.PI * frequency * i / audio.sampleRate; real += samples[offset + i] * Math.cos(phase); imaginary += samples[offset + i] * Math.sin(phase); }
+        if (2 * Math.hypot(real, imaginary) / length < 0.05) throw new Error('会話音声に片方の声がない');
+      }
+      log(`PASS: 両者の画面切替をまたいだ一つの会話音声に両方の声を確認 (${audio.duration.toFixed(2)}秒)`);
     }
     await host.start('QA 同意撤回'); recordIds.push(host.recording!.id); await pause(500); await guest.consent(false);
     await until(() => !host.recorder, '同意撤回による停止');

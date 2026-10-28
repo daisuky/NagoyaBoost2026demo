@@ -11,7 +11,7 @@ export async function driveClient(env, fetcher = fetch) {
   };
 }
 export function validateUpload(body) {
-  if (!/^[a-f0-9-]{36}$/.test(body.recordingId || '') || !['host', 'guest', 'manifest'].includes(body.slot)) throw fail(400, '録音情報が無効です');
+  if (!/^[a-f0-9-]{36}$/.test(body.recordingId || '') || !['host', 'guest', 'conversation', 'manifest'].includes(body.slot)) throw fail(400, '録音情報が無効です');
   const audio = body.slot !== 'manifest';
   if (!(audio ? ['audio/webm', 'audio/mp4'].includes(body.mimeType) : body.mimeType === 'application/json')) throw fail(400, '音声形式が無効です');
   if (!Number.isSafeInteger(body.bytes) || body.bytes < 1 || body.bytes > (audio ? 512 * 1024 * 1024 : 64000)) throw fail(413, '保存できるファイルサイズを超えています');

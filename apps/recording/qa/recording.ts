@@ -15,13 +15,21 @@ button.onclick = async () => {
     const recording: Recording = { id, consultationId: `ippo-${crypto.randomUUID()}`, title: 'QA合成音声（自動削除）', createdAt: new Date().toISOString(), state: 'recording', mimeType: recordingMime(), tracks: [], consent: [], events: [], driveFiles: {} };
     const recorder = await startRecorder(recording, tracks, message => { throw new Error(message); });
     await new Promise(resolve => setTimeout(resolve, 4500)); await recorder.stop('user');
-    if (recording.state !== 'local' || recording.tracks.length !== 2) throw new Error('録音状態が不正');
-    log('PASS: 話者別2トラックを録音し、停止を確定');
+    if (recording.state !== 'local' || recording.tracks.length !== 1 || recording.tracks[0].speakerId !== 'conversation') throw new Error('録音状態が不正');
+    log('PASS: 二人の声を一つの会話トラックに録音し、停止を確定');
     for (const track of recording.tracks) {
       const blob = await store.audio(recording, track.id);
       if (blob.size < 100 || track.chunkCount < 2) throw new Error('音声チャンクが不足');
       const audio = await context.decodeAudioData(await blob.arrayBuffer());
       if (audio.duration < 4) throw new Error('音声長が不足');
+      const samples = audio.getChannelData(0), start = Math.floor(audio.sampleRate), count = Math.floor(audio.sampleRate);
+      for (const frequency of [440, 880]) {
+        let real = 0, imaginary = 0;
+        for (let i = 0; i < count; i++) { const phase = 2 * Math.PI * frequency * i / audio.sampleRate; real += samples[start + i] * Math.cos(phase); imaginary += samples[start + i] * Math.sin(phase); }
+        const amplitude = 2 * Math.hypot(real, imaginary) / count;
+        if (amplitude < 0.1) throw new Error(`${frequency}Hzの話者音声が会話ファイルに含まれていない`);
+        log(`PASS: 同じ音声ファイルから ${frequency}Hz の話者を検出（振幅 ${amplitude.toFixed(3)}）`);
+      }
       log(`PASS: ${track.speakerId} / ${track.chunkCount}チャンク / ${blob.size}bytes / ${audio.duration.toFixed(2)}秒 をIndexedDBから復元・デコード`);
     }
     const restored = (await store.list()).find(r => r.id === id); if (restored?.state !== 'local') throw new Error('メタデータ復元に失敗');

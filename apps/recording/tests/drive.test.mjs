@@ -5,7 +5,23 @@ import { sendResumable } from '../src/core/upload.mjs';
 const body = { recordingId: '12345678-1234-1234-1234-123456789abc', slot: 'host', mimeType: 'audio/webm', bytes: 10, digest: 'a'.repeat(64) };
 test('archive rejects paths, unexpected formats and oversized uploads', () => {
   assert.doesNotThrow(() => validateUpload(body));
+  assert.doesNotThrow(() => validateUpload({ ...body, slot: 'conversation' }));
+  assert.doesNotThrow(() => validateUpload({ ...body, slot: 'guest' }));
   for (const change of [{ slot: '../secret' }, { recordingId: '../foo' }, { mimeType: 'text/html' }, { bytes: 0 }, { bytes: 600 * 1024 * 1024 }, { digest: 'wrong' }]) assert.throws(() => validateUpload({ ...body, ...change }));
+});
+
+test('mixed conversation upload uses its own idempotency slot and fixed Drive folder', async () => {
+  let calls = 0;
+  const mixed = { ...body, slot: 'conversation' };
+  await prepareUpload({ GOOGLE_DRIVE_FOLDER_ID: 'fixed-folder' }, { room: 'a-room' }, mixed, undefined, async (_path, options) => {
+    if (++calls === 1) return Response.json({ files: [] });
+    const metadata = JSON.parse(options.body);
+    assert.match(metadata.name, /_conversation\.webm$/);
+    assert.equal(metadata.appProperties.ippoKey, `a-room:${body.recordingId}:conversation`);
+    assert.deepEqual(metadata.parents, ['fixed-folder']);
+    return new Response('', { headers: { location: 'https://www.googleapis.com/upload/mixed-test' } });
+  });
+  assert.equal(calls, 2);
 });
 test('archive retries find already completed content and do not upload duplicates', async () => {
   const result = await prepareUpload({ GOOGLE_DRIVE_FOLDER_ID: 'fixed-folder' }, { room: 'a-room' }, body, undefined, async path => {

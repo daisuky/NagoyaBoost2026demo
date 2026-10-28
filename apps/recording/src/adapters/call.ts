@@ -49,6 +49,9 @@ export class CallController {
   async connect(action: 'create' | 'join', fields: Record<string, unknown>, credentials?: Credentials) {
     this.closed = false;
     try {
+      // Request a duplex audio session where the browser supports it.
+      const session = typeof navigator !== 'undefined' && (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+      if (session) { try { session.type = 'play-and-record'; } catch { /* Optional browser API. */ } }
       this.local = await this.media();
       if (this.closed) { this.local.getTracks().forEach(t => t.stop()); throw new Error('通話の開始を中断しました。もう一度お試しください。'); }
       if (document.visibilityState !== 'visible') throw new Error('通話画面に戻ってから、もう一度開始してください。');
@@ -86,12 +89,9 @@ export class CallController {
         return;
       }
       this.recoveryStarted = 0;
-      this.message = '画面を離れたため録音を停止しました。音声通話は維持を試みています。';
-      if (this.status) this.status = { ...this.status, allowed: false, recording: false };
-      // Keep the microphone and peer connection alive for the voice call.
-      // Recording is stopped locally and remotely, including when this is guest.
-      await this.stop('page-hidden');
-      await this.call('stop').catch(() => {});
+      this.message = '画面を切り替えても、同じ通話と録音を継続します。';
+      // Visibility is not a media disconnection or a consent withdrawal.
+      // Keep the same microphone, peer, recorder and server recording state.
       await this.poll(); this.emit();
       return;
     }
@@ -116,10 +116,9 @@ export class CallController {
     if (this.closed || !this.credentials || this.resumingCall) return;
     this.resumingCall = true;
     try {
-      // Never resume recording automatically on returning to the app.
-      await this.call('stop');
       await this.poll(); if (this.closed) return;
       if (!this.local?.getAudioTracks().some(track => track.readyState === 'live')) {
+        await this.stop('track-ended');
         const stream = await this.media();
         if (this.closed) { stream.getTracks().forEach(track => track.stop()); return; }
         this.local?.getTracks().forEach(track => track.stop()); this.local = stream;
@@ -135,7 +134,7 @@ export class CallController {
         else if (!this.relayRequested) await this.useRelay();
         else await this.send('relay-request', null);
       }
-      this.message = this.pc?.connectionState === 'connected' ? '通話を継続しています。録音は作成者が手動で再開してください。' : '音声の再接続を確認しています。録音は停止中です。';
+      this.message = this.pc?.connectionState === 'connected' ? (this.status?.recording ? '同じ通話と録音を継続しています。' : '通話を継続しています。') : '音声の再接続を確認しています。';
     } catch (error) {
       if ([401, 403, 410].includes((error as { status?: number }).status || 0)) await this.leave(false, '通話が終了したか、参加情報の有効期限が切れました。');
       else { this.recoveryStarted ||= Date.now(); this.message = '接続を確認しています。録音は停止中です。'; }
@@ -258,7 +257,7 @@ export class CallController {
     if (this.polling || this.closed || this.waitingSuspended || !this.credentials) return;
     this.polling = true;
     try {
-      const status = await this.call('heartbeat', { cursor: this.cursor, connected: this.pageVisible && this.pc?.connectionState === 'connected' && !this.negotiating });
+      const status = await this.call('heartbeat', { cursor: this.cursor, connected: this.pc?.connectionState === 'connected' && !this.negotiating });
       if (this.closed || this.waitingSuspended) return;
       for (const signal of status.signals || []) {
         if (signal.seq <= this.cursor) continue;
@@ -277,7 +276,8 @@ export class CallController {
         this.message = '接続管理との通信を再試行しています。音声通話は維持を試み、録音は停止しています。';
         if (this.pageVisible) {
           this.recoveryStarted ||= Date.now();
-          if (Date.now() - this.recoveryStarted >= 90000) await this.leave(false, '90秒間接続を確認できなかったため、通話を終了しました。');
+          // A signaling outage must not tear down a still-live voice call.
+          // Recording stays stopped until consent/status can be checked again.
         }
         this.emit();
       }
@@ -329,9 +329,9 @@ export class CallController {
         if (!track) throw new Error('二人の音声の接続を待ってから録音してください');
         return { stream: new MediaStream([track]), speakerId, speakerName: status.participants.find(p => p.identity === speakerId)?.name || speakerId };
       });
-      if (epoch !== this.epoch || document.visibilityState !== 'visible' || this.closed) { await this.call('stop'); return; }
+      if (epoch !== this.epoch || this.closed) { await this.call('stop'); return; }
       this.recording = { id: crypto.randomUUID(), consultationId: c.room, title: title.trim() || '新しい対話', createdAt: new Date().toISOString(), state: 'recording', mimeType: recordingMime(), tracks: [], consent: status.participants, events: [{ at: status.serverTime, reason: 'both-consented' }], driveFiles: {}, archiveAuth: c.archiveAuth };
-      this.recorder = await startRecorder(this.recording, tracks, message => { this.error(message); void this.stop('storage-error'); });
+      this.recorder = await startRecorder(this.recording, tracks, message => { this.error(message); void this.stop('recording-error'); });
       if (epoch !== this.epoch || this.closed || !this.status?.allowed || !this.status.recording) { await this.recorder.stop('interrupted-during-start'); this.recorder = undefined; this.saved(); }
       this.emit();
     });
