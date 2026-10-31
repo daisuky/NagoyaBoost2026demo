@@ -1,15 +1,23 @@
 const CACHE = 'ippo-shell-__BUILD_ID__';
 const BUILD_ASSETS = [] /* build-assets */;
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(['/', '/icon.svg', '/manifest.webmanifest', ...BUILD_ASSETS]))));
-self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key))))));
+self.addEventListener('message', event => { if (event.data?.type === 'ACTIVATE_UPDATE') event.waitUntil(self.skipWaiting()); });
+self.addEventListener('activate', event => event.waitUntil((async () => {
+  const keys = await caches.keys();
+  await Promise.all(keys.filter(key => key.startsWith('ippo-shell-') && key !== CACHE).map(key => caches.delete(key)));
+  await self.clients.claim();
+})()));
 // API, OAuth, Drive and audio are never cached. Assets are cached only on this origin.
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
-  if (event.request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
+  if (event.request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/') || url.pathname === '/version.json') return;
   event.respondWith(fetch(event.request).then(response => {
     if (response.ok) { const copy = response.clone(); event.waitUntil(caches.open(CACHE).then(cache => cache.put(event.request, copy))); }
     return response;
-  }).catch(async () => (await caches.match(event.request)) || (event.request.mode === 'navigate' ? await caches.match('/') : Response.error())));
+  }).catch(async () => {
+    const cache = await caches.open(CACHE);
+    return (await cache.match(event.request)) || (event.request.mode === 'navigate' ? await cache.match('/') : Response.error());
+  }));
 });
 self.addEventListener('push', event => {
   event.waitUntil((async () => {

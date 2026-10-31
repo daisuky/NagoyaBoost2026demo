@@ -43,3 +43,5 @@ Google CloudでDrive API・Picker APIとOAuthクライアントを用意し、�
 公開前に `public/privacy.html` の問い合わせ先・保存方針を、自分の運用に合わせて更新してください。公開版のビルド・自動テストは実サービスやiPhone実機の検証を代替しません。
 
 [リポジトリの案内](../../README.md)
+
+起動場所・更新・再招待の手順は [操作案内](docs/startup-and-invitations.md) を参照してください。

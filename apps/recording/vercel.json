@@ -2,14 +2,56 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "framework": "vite",
-  "functions": { "api/call.js": { "maxDuration": 30 }, "api/incoming.js": { "maxDuration": 60 }, "api/contacts.js": { "maxDuration": 30 } },
+  "functions": {
+    "api/call.js": {
+      "maxDuration": 30
+    },
+    "api/incoming.js": {
+      "maxDuration": 60
+    },
+    "api/contacts.js": {
+      "maxDuration": 30
+    }
+  },
   "headers": [
-    { "source": "/(.*)", "headers": [
-      { "key": "Referrer-Policy", "value": "no-referrer" },
-      { "key": "X-Content-Type-Options", "value": "nosniff" },
-      { "key": "Permissions-Policy", "value": "microphone=(self), camera=()" },
-      { "key": "X-Frame-Options", "value": "DENY" }
-    ] },
-    { "source": "/sw.js", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] }
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "microphone=(self), camera=()"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        }
+      ]
+    },
+    {
+      "source": "/sw.js",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
+    },
+    {
+      "source": "/version.json",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        }
+      ]
+    }
   ]
 }

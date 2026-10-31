@@ -3,7 +3,7 @@ import type { Credentials } from './types';
 export type Certificate = { root: string; chain: { key: string; signature: string }[] };
 export type Identity = { privateKey: CryptoKey; certificate: Certificate; userId: string; deviceId: string };
 export type Contact = { userId: string; root: string; name: string; confirmed: boolean };
-type Exchange = { id: string; secret: string; ownerRoot: string; ownerName: string };
+type Exchange = { id: string; secret: string; ownerRoot: string; ownerName: string; expiresAt?: number };
 type LocalState = { name: string; contacts: Contact[]; exchanges: Record<string, Exchange>; enrollment?: { id: string; secret: string; key: string; expiresAt: number } };
 export type Ring = { id: string; caller: string; callee: string; callerDevice: string; answeredBy?: string; state: string; expiresAt: number; room: string; push: string; offer: any };
 export type Directory = { self: string; deviceId: string; contacts: { userId: string }[]; exchanges: { id: string; owner: string; claimant?: string; ownerRoot: string; claimantRoot?: string; card?: string; approvals: string[]; expiresAt: number }[]; devices: { id: string }[]; calls: Ring[]; notifications: boolean };
@@ -11,11 +11,20 @@ export type Health = { enabled: boolean; protocol: string; pushConfigured: boole
 export type RingResult = { call: Ring; credentials: Credentials };
 const base = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 let database: Promise<IDBDatabase> | undefined;
-const db = () => database ||= new Promise((resolve, reject) => {
+const db = () => database ||= new Promise<IDBDatabase>((resolve, reject) => {
   const req = indexedDB.open('ippo-identity-v1', 1);
+  let settled = false;
+  const fail = (error: unknown) => { if (!settled) { settled = true; clearTimeout(timer); reject(error); } };
+  const timer = setTimeout(() => fail(new Error('保存領域を開けませんでした。他の画面を閉じて再確認してください。')), 4000);
   req.onupgradeneeded = () => req.result.createObjectStore('local');
-  req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
-});
+  req.onsuccess = () => {
+    if (settled) { req.result.close(); return; }
+    settled = true; clearTimeout(timer);
+    req.result.onversionchange = () => { req.result.close(); database = undefined; };
+    resolve(req.result);
+  };
+  req.onerror = () => fail(req.error); req.onblocked = () => fail(new Error('別の画面が保存領域の更新を待たせています。'));
+}).catch(error => { database = undefined; throw error; });
 async function read<T>(key: string): Promise<T | undefined> {
   return new Promise((resolve, reject) => { void db().then(d => { const tx = d.transaction('local'); const req = tx.objectStore('local').get(key); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); }).catch(reject); });
 }
@@ -27,6 +36,21 @@ export const localBook = {
   put: (value: LocalState) => write('book', value)
 };
 export async function getIdentity() { return read<Identity>('identity'); }
+export async function probeIdentityStorage() {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([(async () => {
+      const d = await db(), key = `probe-${crypto.randomUUID()}`;
+      await new Promise<void>((resolve, reject) => {
+        const tx = d.transaction('local', 'readwrite'), local = tx.objectStore('local');
+        local.put('ok', key);
+        const readback = local.get(key);
+        readback.onsuccess = () => { if (readback.result !== 'ok') tx.abort(); else local.delete(key); };
+        tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error || new Error('保存確認が中断されました'));
+      });
+    })(), new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error('保存領域の確認がタイムアウトしました')), 5000); })]);
+  } finally { clearTimeout(timeout); }
+}
 export async function prepareIdentity(): Promise<Identity> {
   const existing = await getIdentity(); if (existing) return existing;
   // Browser WebCrypto stores a non-extractable private CryptoKey in IndexedDB.
@@ -44,7 +68,7 @@ export async function prepareIdentity(): Promise<Identity> {
 }
 export async function resetLocalIdentity() {
   const d = await db();
-  await new Promise<void>((resolve, reject) => { const tx = d.transaction('local', 'readwrite'); tx.objectStore('local').delete('identity'); tx.objectStore('local').delete('book'); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); });
+  await new Promise<void>((resolve, reject) => { const tx = d.transaction('local', 'readwrite'); tx.objectStore('local').delete('identity'); tx.objectStore('local').delete('book'); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error || new Error('初期化が中断されました')); });
 }
 export async function signedEnvelope(endpoint: string, action: string, fields: Record<string, unknown>, identity?: Identity) {
   const me = identity || await prepareIdentity();
@@ -82,7 +106,8 @@ export async function makeContactLink() {
   const exchange: Exchange = { id: crypto.randomUUID(), secret: randomSecret(), ownerRoot: me.certificate.root, ownerName: book.name };
   // Save first so a lost network response never loses the secret needed to receive the reply.
   book.exchanges[exchange.id] = exchange; await localBook.put(book);
-  await identityApi('contacts', 'exchange-create', { id: exchange.id, token: await digest(exchange.secret) });
+  const result = await identityApi<{ expiresAt: number }>('contacts', 'exchange-create', { id: exchange.id, token: await digest(exchange.secret) });
+  exchange.expiresAt = result.expiresAt;
   return linkFor('contact', exchange);
 }
 export async function claimContact(value: string) {
@@ -96,7 +121,12 @@ export async function claimContact(value: string) {
   book.exchanges[card.id] = card;
   if (!previous) book.contacts.push({ userId: ownerId, root: card.ownerRoot, name: card.ownerName, confirmed: false });
   await localBook.put(book);
-  const result = await identityApi('contacts', 'exchange-claim', { id: card.id, token: await digest(card.secret), card: await seal(card.secret, { root: me.certificate.root, name: book.name }) });
+  let result: Directory;
+  try { result = await identityApi('contacts', 'exchange-claim', { id: card.id, token: await digest(card.secret), card: await seal(card.secret, { root: me.certificate.root, name: book.name }) }); }
+  catch (error) {
+    if ((error as { status?: number }).status === 410) throw Object.assign(new Error('この登録リンクは利用できません。期限切れ・使用済み・無効などが考えられます。招待した方に新しいリンクを作ってもらってください。'), { status: 410 });
+    throw error;
+  }
   const server = result.exchanges.find(x => x.id === card.id);
   if (server?.ownerRoot !== card.ownerRoot || server?.claimantRoot !== me.certificate.root) throw new Error('連絡先の鍵が一致しません。承認せずLINEで確認してください');
   return result;
